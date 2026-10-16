@@ -22,7 +22,7 @@ animation = folder / "animate.py"
 # FIND CSV FILE
 # ---------------------------------------
 
-csv_files = list(folder.glob("*.csv"))
+csv_files = list((folder / "simulations").glob("*.csv"))
 
 if not csv_files:
     print("ERROR: No CSV files found!")
