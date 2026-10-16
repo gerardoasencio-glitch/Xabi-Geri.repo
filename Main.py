@@ -1,7 +1,8 @@
 import subprocess
 import sys
 from pathlib import Path
-
+import tkinter as tk
+from tkinter import messagebox
 
 # ---------------------------------------
 # PROJECT FOLDER
@@ -70,53 +71,71 @@ tracker_process = subprocess.Popen(
 # START ROCKET ANIMATION
 # ---------------------------------------
 
-print("Starting Rocket Animation...", flush=True)
+# Ask whether to open the animation.
+root = tk.Tk()
+root.withdraw()
 
-animation_process = subprocess.Popen(
-    [
-        sys.executable,
-        str(animation),
-        str(csv_file)
-    ],
-    cwd=folder
-)
+try:
+    show_animation = messagebox.askyesno(
+        "Flight animation",
+        f"Would you like to see the flight animation?\n\n{csv_file.name}",
+        parent=root,
+    )
+finally:
+    root.destroy()
 
+animation_process = None
 
-# ---------------------------------------
-# WAIT FOR BOTH PROGRAMS
-# ---------------------------------------
+if show_animation:
+    print("Starting Rocket Animation...", flush=True)
 
-print("Both programs have been launched!", flush=True)
+    animation_process = subprocess.Popen(
+        [
+            sys.executable,
+            str(animation),
+            str(csv_file),
+        ],
+        cwd=folder,
+    )
+
+# Wait for the programs that were started.
+processes = [tracker_process]
+
+if animation_process is not None:
+    processes.append(animation_process)
 
 try:
     tracker_result = tracker_process.wait()
-    animation_result = animation_process.wait()
+
+    animation_result = (
+        animation_process.wait()
+        if animation_process is not None
+        else None
+    )
 
 except KeyboardInterrupt:
     print("\nStopping programs...")
 
-    for process in (tracker_process, animation_process):
+    for process in processes:
         if process.poll() is None:
             process.terminate()
 
-    for process in (tracker_process, animation_process):
+    for process in processes:
         process.wait()
 
     sys.exit(130)
-
-
-# ---------------------------------------
-# CHECK RESULTS
-# ---------------------------------------
 
 if tracker_result == 0:
     print("Excel Tracker finished successfully!")
 else:
     print("Excel Tracker encountered an error.")
 
-if animation_result == 0:
-    print("Rocket Animation finished successfully!")
+if animation_result is not None:
+    if animation_result == 0:
+        print("Rocket Animation finished successfully!")
+    else:
+        print("Rocket Animation encountered an error.")
 else:
-    print("Rocket Animation encountered an error.")
+    print("Animation skipped.")
 
 print("All programs finished!")
