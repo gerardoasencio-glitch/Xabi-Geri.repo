@@ -8,4 +8,4 @@ To keep things simple, have only one person download THE_Tracker.py to their sys
 
 Afterwards, just run the tracker and it'll find the most recent simulation made and create an Excel file named: 'Simulation_tracker_psi_v2' 
 
-Simply enter and enjoy your organized data including relevant information with graphs. There's also a History tab that shows all previous simulations uploaded to the tracker and 
+Simply enter and enjoy your organized data including relevant information with graphs. There's also a History tab that shows all previous simulations uploaded to the tracker. 
