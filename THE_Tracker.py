@@ -288,7 +288,7 @@ def main():
     folder = Path(__file__).resolve().parent
 
     if args.csv is None: 
-        csv_files = list(folder.glob('*.csv'))
+        csv_files = list((folder / 'simulations').glob('*.csv'))
 
         if not csv_files:
             parser.error(f'No CSV files found in {folder}. Please provide a CSV file to import.')
