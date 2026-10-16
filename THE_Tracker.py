@@ -1,6 +1,8 @@
 """Import one simulation into a versioned Excel tracker. Python 3.10+."""
 import argparse
 import csv
+from email import header
+from email import header
 import hashlib
 import json
 import math
@@ -25,7 +27,7 @@ UNITS = {
     'altitude': {'ft': 1, 'm': 1 / .3048},
     'thrust': {'N': 1, 'lbf': 4.4482216152605},
     'velocity': {'m/s': 1, 'ft/s': .3048},
-    'acceleration': {'m/s2': 1, 'm/s²': 1, 'ft/s2': .3048, 'g': 9.80665},
+    'acceleration': {'m/s2': 1, 'm/s²': 1, 'ft/s2': .3048, 'ft/s²': .3048, 'g': 9.80665},
     'dynamic_pressure': {'Pa': 1, 'kPa': 1000, 'bar': 100000, 'psi': 6894.757293},
     'stability': {'cal': 1},
 }
@@ -69,11 +71,133 @@ def convert(header, rows, cfg):
     mapping = cfg.get('columns', {})
     series = {}
     resolved = {}
+
+    # Read and convert the flight-data columns.
+    for key in LABELS:
+        spec = mapping.get(key)
+
+        if spec is None:
+            base = {
+                'velocity': 'Total velocity',
+                'acceleration': 'Total acceleration',
+            }.get(key, key.replace('_', ' '))
+
+            matches = []
+
+            for name in header:
+                match = re.fullmatch(
+                    re.escape(base) + r'\s*[\[(](.*?)[\])]',
+                    name,
+                    re.I,
+                )
+
+                if match and match[1] in UNITS[key]:
+                    matches.append({
+                        'name': name,
+                        'unit': match[1],
+                    })
+
+            if len(matches) > 1:
+                raise ValueError(
+                    f'Ambiguous {key}; explicitly map its column.'
+                )
+
+            spec = matches[0] if matches else None
+
+        if spec is None:
+            continue
+
+        name = spec['name']
+        unit = spec['unit']
+
+        if name not in header or unit not in UNITS[key]:
+            raise ValueError(f'Invalid mapping/unit for {key}: {spec}')
+
+        index = header.index(name)
+        factor = UNITS[key][unit]
+
+        if key == 'dynamic_pressure':
+            factor /= 6894.757293
+
+        values = [number(row[index]) for row in rows]
+
+        series[key] = [
+            value * factor if value is not None else None
+            for value in values
+        ]
+
+        resolved[key] = spec
+
+    # Check the time column.
+    if 'time' not in series:
+        raise ValueError(
+            'Time column is required. Set columns.time name and unit.'
+        )
+
+    times = series['time']
+
+    if (
+        len(times) < 2
+        or any(t is None for t in times)
+        or any(b <= a for a, b in zip(times, times[1:]))
+    ):
+        raise ValueError(
+            'Need at least two strictly increasing numeric times.'
+        )
+
+    # Read any configured engine-pressure columns and convert to psi.
+    for pressure in cfg.get('pressures', []):
+        index = header.index(pressure['name'])
+        factor = (
+            UNITS['dynamic_pressure'][pressure['unit']]
+            / 6894.757293
+        )
+
+        key = 'pressure: ' + pressure.get(
+            'label', pressure['name']
+        )
+
+        if key in series:
+            raise ValueError('Duplicate pressure label.')
+
+        values = [number(row[index]) for row in rows]
+
+        series[key] = [
+            value * factor if value is not None else None
+            for value in values
+        ]
+
+    # Calculate dynamic pressure using density and total velocity.
+    if 'dynamic_pressure' not in series and 'velocity' in series:
+        density_column = 'Air density (kg/m³)'
+
+        if density_column in header:
+            index = header.index(density_column)
+            density = [number(row[index]) for row in rows]
+
+            series['dynamic_pressure'] = [
+                0.5 * rho * speed**2 / 6894.757293
+                if rho is not None and speed is not None
+                else None
+                for rho, speed in zip(density, series['velocity'])
+            ]
+
+            resolved['dynamic_pressure'] = {
+                'method': 'Calculated: 0.5 * density * total_velocity²',
+                'unit': 'psi',
+            }
+
+    return series, resolved
+    
     for key in LABELS:
         spec = mapping.get(key)
         if spec is None:
             # Only exact variable names with explicit supported units are inferred.
-            base = key.replace('_', ' ')
+            base = {
+                'velocity': 'Total velocity',
+                'acceleration': 'Total acceleration',
+            }.get(key, key.replace('_', ' '))
+
             matches = []
             for name in header:
                 match = re.fullmatch(re.escape(base) + r'\s*[\[(](.*?)[\])]', name, re.I)
@@ -156,7 +280,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('csv', type=Path, nargs='?', help='CSV file to import')
     parser.add_argument('--config', type=Path)
-    parser.add_argument('--output', type=Path, default=Path('simulation_tracker.xlsx'))
+    parser.add_argument('--output', type=Path, default=Path('simulation_tracker_psi_v2.xlsx'))
     parser.add_argument('--name', default='Simulation')
     parser.add_argument('--source-url', help='Shared web URL for this CSV, if available')
     args = parser.parse_args()
@@ -179,9 +303,33 @@ def main():
     cfg = json.loads(args.config.read_text()) if args.config else {}
     header, rows = read_csv(args.csv, cfg)
     series, resolved = convert(header, rows, cfg)
+
+    motor_mass_index = header.index('Motor mass (lb)')
+    rocket_mass_index = header.index('Mass (lb)')
+
+    initial_motor_kg = float(rows[0][motor_mass_index]) * 0.45359237
+    final_motor_kg = float(rows[-1][motor_mass_index]) * 0.45359237
+
+    propellant_kg = initial_motor_kg - final_motor_kg
+    dry_mass_kg = float(rows[-1][rocket_mass_index]) * 0.45359237
+
+    cfg.setdefault('consumed_propellant_kg', propellant_kg)
+    cfg.setdefault('loaded_propellant_kg', propellant_kg)
+    cfg.setdefault('dry_mass_kg', dry_mass_kg)
+    cfg.setdefault('dry_mass_scope', 'Entire rocket; final mass assumed dry')
+
+    # Replace blank configuration entries with calculated values.
+    if cfg['consumed_propellant_kg'] is None:
+        cfg['consumed_propellant_kg'] = propellant_kg
+    if cfg['loaded_propellant_kg'] is None:
+        cfg['loaded_propellant_kg'] = propellant_kg
+    if cfg['dry_mass_kg'] is None:
+        cfg['dry_mass_kg'] = dry_mass_kg
+
     values = metrics(series, cfg)
     args.output = args.output.resolve()
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    print(f'Excel file: {args.output}')
     wb = load_workbook(args.output) if args.output.exists() else Workbook()
     if 'History' not in wb.sheetnames:
         if args.output.exists():
@@ -244,16 +392,48 @@ def main():
     latest.cell(2, 2).hyperlink = f"#'{run}'!A1"
     for sheet in [history, raw, data, summary, latest]:
         style(sheet)
-    fd, tmp = tempfile.mkstemp(suffix='.xlsx', dir=args.output.parent)
+
+    run_numbers = sorted(
+        {
+            int(match.group(1))
+            for name in wb.sheetnames
+            if (match := re.fullmatch(r'R(\d+)(?:_Raw|_Data)?', name))
+        },
+        reverse=True,
+    )
+
+    ordered_names = ['Latest', 'History']
+
+    for run_number in run_numbers:
+        run_id = f'R{run_number:04d}'
+
+        for name in [run_id, run_id + '_Raw', run_id + '_Data']:
+            if name in wb.sheetnames:
+                ordered_names.append(name)
+
+    for position, name in enumerate(ordered_names):
+        current_position = wb.sheetnames.index(name)
+        wb.move_sheet(name, offset=position - current_position)
+
+    fd, tmp = tempfile.mkstemp(
+        suffix='.xlsx',
+        dir=args.output.parent,
+    )
     os.close(fd)
+
     try:
         wb.save(tmp)
         os.replace(tmp, args.output)
     finally:
         Path(tmp).unlink(missing_ok=True)
+
     print(f'Imported {run}: {args.output}')
     print('Detected mappings:', json.dumps(resolved))
-    print('Missing metrics:', ', '.join(k for k, v in values.items() if v is None))
+    print(
+        'Missing metrics:',
+        ', '.join(k for k, v in values.items() if v is None),
+    )
+
 
 if __name__ == '__main__':
     try:
