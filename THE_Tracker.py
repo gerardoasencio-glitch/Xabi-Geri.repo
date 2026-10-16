@@ -18,7 +18,7 @@ from openpyxl.styles import Font, PatternFill
 LABELS = {
     'time': 'Time [s]', 'altitude': 'Altitude [ft]', 'thrust': 'Thrust [N]',
     'velocity': 'Velocity [m/s]', 'acceleration': 'Acceleration [m/s²]',
-    'dynamic_pressure': 'Dynamic pressure [Pa]', 'stability': 'Stability [cal]',
+    'dynamic_pressure': 'Dynamic pressure [psi]', 'stability': 'Stability [cal]',
 }
 UNITS = {
     'time': {'s': 1, 'ms': .001},
@@ -89,6 +89,8 @@ def convert(header, rows, cfg):
             raise ValueError(f'Invalid mapping/unit for {key}: {spec}')
         idx = header.index(name)
         factor = UNITS[key][unit]
+        if key == 'dynamic_pressure':
+            factor /= 6894.757293  # Convert to psi for internal storage.
         series[key] = [None if number(r[idx]) is None else number(r[idx]) * factor for r in rows]
         resolved[key] = spec
     if 'time' not in series:
@@ -98,7 +100,7 @@ def convert(header, rows, cfg):
         raise ValueError('Need at least two strictly increasing numeric times; split multiple simulations first.')
     for p in cfg.get('pressures', []):
         idx = header.index(p['name'])
-        factor = UNITS['dynamic_pressure'][p['unit']]
+        factor = UNITS['dynamic_pressure'][p['unit']] / 6894.757293
         key = 'pressure: ' + p.get('label', p['name'])
         if key in series:
             raise ValueError('Duplicate pressure label.')
@@ -111,7 +113,7 @@ def metrics(series, cfg):
               'Final recorded time [s]': series['time'][-1]}
     for key, label in [('altitude', 'Apogee [ft]'), ('thrust', 'Peak thrust [N]'),
                        ('velocity', 'Maximum velocity [m/s]'), ('acceleration', 'Maximum acceleration [m/s²]'),
-                       ('dynamic_pressure', 'Maximum dynamic pressure [Pa]')]:
+                       ('dynamic_pressure', 'Maximum dynamic pressure [psi]')]:
         values = [x for x in series.get(key, []) if x is not None]
         result[label] = max(values) if values else None
     thrust = series.get('thrust')
@@ -152,12 +154,23 @@ def style(sheet):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('csv', type=Path)
+    parser.add_argument('csv', type=Path, nargs='?', help='CSV file to import')
     parser.add_argument('--config', type=Path)
     parser.add_argument('--output', type=Path, default=Path('simulation_tracker.xlsx'))
     parser.add_argument('--name', default='Simulation')
     parser.add_argument('--source-url', help='Shared web URL for this CSV, if available')
     args = parser.parse_args()
+    if args.csv is None: 
+        folder = Path(__file__).resolve().parent
+        csv_files = list(folder.glob('*.csv'))
+
+        if not csv_files:
+            parser.error(f'No CSV files found in {folder}. Please provide a CSV file to import.')
+
+            args.csv = max(csv_files, key=lambda f: f.stat().st_mtime)
+
+    print(f'Reading CSV: {args.csv.name}')
+    
     cfg = json.loads(args.config.read_text()) if args.config else {}
     header, rows = read_csv(args.csv, cfg)
     series, resolved = convert(header, rows, cfg)
@@ -208,9 +221,9 @@ def main():
     for index, key in enumerate(k for k in keys if k != 'time'):
         col = keys.index(key) + 1
         chart = ScatterChart()
-        chart.title = LABELS.get(key, key + ' [Pa]')
+        chart.title = LABELS.get(key, key + ' [psi]')
         chart.x_axis.title = 'Time [s]'
-        chart.y_axis.title = LABELS.get(key, key + ' [Pa]')
+        chart.y_axis.title = LABELS.get(key, key + ' [psi]')
         chart.scatterStyle = 'line'
         chart.series.append(Series(Reference(data, min_col=col, min_row=2, max_row=data.max_row),
                                    Reference(data, min_col=keys.index('time') + 1, min_row=2, max_row=data.max_row), title=key))
