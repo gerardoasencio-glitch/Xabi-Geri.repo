@@ -160,17 +160,24 @@ def main():
     parser.add_argument('--name', default='Simulation')
     parser.add_argument('--source-url', help='Shared web URL for this CSV, if available')
     args = parser.parse_args()
+
+    folder = Path(__file__).resolve().parent
+
     if args.csv is None: 
-        folder = Path(__file__).resolve().parent
         csv_files = list(folder.glob('*.csv'))
 
         if not csv_files:
             parser.error(f'No CSV files found in {folder}. Please provide a CSV file to import.')
 
-            args.csv = max(csv_files, key=lambda f: f.stat().st_mtime)
+        args.csv = max(csv_files, key=lambda f: f.stat().st_mtime)
+
+    if not args.output.is_absolute():
+        args.output = folder / args.output
 
     print(f'Reading CSV: {args.csv.name}')
-    
+
+    print(f'Reading CSV: {args.csv.name}')
+
     cfg = json.loads(args.config.read_text()) if args.config else {}
     header, rows = read_csv(args.csv, cfg)
     series, resolved = convert(header, rows, cfg)
