@@ -176,8 +176,6 @@ def main():
 
     print(f'Reading CSV: {args.csv.name}')
 
-    print(f'Reading CSV: {args.csv.name}')
-
     cfg = json.loads(args.config.read_text()) if args.config else {}
     header, rows = read_csv(args.csv, cfg)
     series, resolved = convert(header, rows, cfg)
