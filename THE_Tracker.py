@@ -2,8 +2,6 @@
 import argparse
 
 import csv
-from email import header
-from email import header
 import hashlib
 import json
 import math
@@ -282,7 +280,7 @@ def main():
     parser.add_argument('csv', type=Path, nargs='?', help='CSV file to import')
     parser.add_argument('--config', type=Path)
     parser.add_argument('--output', type=Path, default=Path('simulation_tracker_psi_v2.xlsx'))
-    parser.add_argument('--name', default='Simulation')
+    parser.add_argument('--name', default=None, help='Optional run name; defaults to CSV filename without extension')
     parser.add_argument('--source-url', help='Shared web URL for this CSV, if available')
     args = parser.parse_args()
 
@@ -300,6 +298,12 @@ def main():
         args.output = folder / args.output
 
     print(f'Reading CSV: {args.csv.name}')
+
+    if args.name is None:
+        args.name = args.csv.name
+
+        while args.name.lower().endswith('.csv'):
+            args.name = args.name[:-4]
 
     cfg = json.loads(args.config.read_text()) if args.config else {}
     header, rows = read_csv(args.csv, cfg)
@@ -359,7 +363,7 @@ def main():
         put(raw, [number(x) if number(x) is not None else x for x in row])
     data = wb.create_sheet(run + '_Data')
     keys = list(series)
-    put(data, [LABELS.get(k, k + ' [Pa]') for k in keys])
+    put(data, [LABELS.get(k, k + ' [psi]') for k in keys])
     for row in zip(*(series[k] for k in keys)):
         put(data, list(row))
     summary = wb.create_sheet(run)
